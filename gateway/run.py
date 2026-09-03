@@ -751,6 +751,42 @@ def _interim_metadata(
     return merged
 
 
+def _progress_bubble_metadata(
+    *,
+    progress_thread_id: Optional[str],
+    source: Any,
+    event_message_id: Any,
+    relay_prospective_thread_id: Optional[str],
+    thread_metadata_for_source: Any,
+    thread_metadata_for_target: Any,
+) -> Optional[Dict[str, Any]]:
+    """Assemble tool-invocation progress-bubble metadata.
+
+    Progress bubbles are status lines for a running tool call — never the
+    turn's final answer — so the assembly always carries the
+    :func:`_interim_metadata` marker. Adapters use it to tell progress
+    apart from real replies, and stream-is-the-message lanes must not
+    seal on it. Thread routing mirrors the inline assembly this replaces;
+    only the marker is new (#102271).
+    """
+    metadata = (
+        thread_metadata_for_source(source, event_message_id)
+        if progress_thread_id == source.thread_id
+        else thread_metadata_for_target(
+            source.platform,
+            source.chat_id,
+            progress_thread_id,
+            chat_type=getattr(source, "chat_type", None),
+            reply_to_message_id=event_message_id,
+        )
+    ) if progress_thread_id else None
+    if metadata is None and relay_prospective_thread_id:
+        metadata = {"reply_to_message_id": event_message_id}
+    return _interim_metadata(
+        _non_conversational_metadata(metadata, platform=source.platform)
+    )
+
+
 def _seed_hygiene_system_prompt(
     agent: Any,
     session_row: Optional[Dict[str, Any]],
@@ -31723,22 +31759,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             and not source.thread_id
             else None
         )
-        _progress_metadata = (
-            self._thread_metadata_for_source(source, event_message_id)
-            if _progress_thread_id == source.thread_id
-            else self._thread_metadata_for_target(
-                source.platform,
-                source.chat_id,
-                _progress_thread_id,
-                chat_type=getattr(source, "chat_type", None),
-                reply_to_message_id=event_message_id,
-            )
-        ) if _progress_thread_id else None
-        if _progress_metadata is None and _relay_prospective_thread_id:
-            # No real thread yet, but the connector will auto-thread on the
-            # reply anchor; carry it so progress joins that thread.
-            _progress_metadata = {"reply_to_message_id": event_message_id}
-        _progress_metadata = _non_conversational_metadata(_progress_metadata, platform=source.platform)
+        _progress_metadata = _progress_bubble_metadata(
+            progress_thread_id=_progress_thread_id,
+            source=source,
+            event_message_id=event_message_id,
+            relay_prospective_thread_id=_relay_prospective_thread_id,
+            thread_metadata_for_source=self._thread_metadata_for_source,
+            thread_metadata_for_target=self._thread_metadata_for_target,
+        )
         if _native_slack_task_cards:
             # chat.startStream in channels requires the recipient team/user
             # pair; harmless extras elsewhere, so stamp them whenever known.

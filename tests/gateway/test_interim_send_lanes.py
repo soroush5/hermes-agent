@@ -22,7 +22,9 @@ wrap per call site (grep `_interim_metadata(` in gateway/run.py).
 
 import pytest
 
-from gateway.run import _interim_metadata
+from typing import Any
+
+from gateway.run import _interim_metadata, _progress_bubble_metadata
 from tests.gateway.relay.test_relay_live_cards import _connected_adapter
 
 
@@ -81,3 +83,59 @@ class TestHeartbeatShapedSendDoesNotSeal:
         seals = [o for o in t.ops if o["op"] == "draft" and o.get("final")]
         assert len(seals) == 1
         assert seals[0]["content"] == "partial answer, done."
+
+
+class TestProgressBubbleMetadata:
+    """#102271: tool-invocation progress bubbles are never the turn-final,
+    so their metadata must always carry the interim marker — on every
+    platform, in every thread-routing branch."""
+
+    def _source(self, platform: Any = "telegram", thread_id: Any = "t1"):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            platform=platform,
+            chat_id="c1",
+            thread_id=thread_id,
+            chat_type="group",
+        )
+
+    def _build(self, source, thread_id, relay_id=None):
+        md = _progress_bubble_metadata(
+            progress_thread_id=thread_id,
+            source=source,
+            event_message_id="m9",
+            relay_prospective_thread_id=relay_id,
+            thread_metadata_for_source=lambda s, m: {"thread_id": s.thread_id},
+            thread_metadata_for_target=(
+                lambda p, c, t, **kw: {"thread_id": t, "reply_to": kw.get("reply_to_message_id")}
+            ),
+        )
+        assert md is not None
+        return md
+
+    def test_same_thread_carries_marker(self):
+        md = self._build(self._source(thread_id="t1"), "t1")
+        assert md["_interim_send"] is True
+        assert md["thread_id"] == "t1"
+        assert "non_conversational" not in md
+
+    def test_other_thread_carries_marker(self):
+        md = self._build(self._source(thread_id="t1"), "t2")
+        assert md["_interim_send"] is True
+        assert md["thread_id"] == "t2"
+        assert md["reply_to"] == "m9"
+
+    def test_relay_fallback_carries_marker(self):
+        md = self._build(self._source(thread_id=None), None, relay_id="anchor1")
+        assert md["_interim_send"] is True
+        assert md["reply_to_message_id"] == "m9"
+
+    def test_no_thread_no_relay_still_marked(self):
+        md = self._build(self._source(thread_id=None), None)
+        assert md == {"_interim_send": True}
+
+    def test_discord_keeps_both_marks(self):
+        md = self._build(self._source(platform="discord"), "t1")
+        assert md["_interim_send"] is True
+        assert md["non_conversational"] is True
