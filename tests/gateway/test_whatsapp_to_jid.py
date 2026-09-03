@@ -28,6 +28,19 @@ class TestToWhatsappJid:
         assert to_whatsapp_jid(raw) == expected
 
     @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            # bare group ids (120363…, longer than any E.164 number) → group JID
+            ("120363012345678901", "120363012345678901@g.us"),
+            ("+120363012345678901", "120363012345678901@g.us"),
+        ],
+    )
+    def test_bare_group_id_becomes_group_jid(self, raw, expected):
+        """#102328: an 18-digit group id must not become a user JID that
+        delivers nowhere while reporting success."""
+        assert to_whatsapp_jid(raw) == expected
+
+    @pytest.mark.parametrize(
         "jid",
         [
             "50766715226@s.whatsapp.net",  # already a user JID

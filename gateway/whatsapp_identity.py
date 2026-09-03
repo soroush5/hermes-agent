@@ -85,7 +85,8 @@ def to_whatsapp_jid(value: str) -> str:
 
     Behaviour:
 
-    - ``"+50766715226"`` / ``"50766715226"`` → ``"50766715226@s.whatsapp.net"``
+    - ``"+507****5226"`` / ``"50766715226"`` → ``"50766715226@s.whatsapp.net"``
+    - ``"120363012345678901"`` (bare group id) → ``"120363012345678901@g.us"``
     - ``"50766715226@s.whatsapp.net"`` → unchanged
     - ``"group-id@g.us"`` / ``"130631430344750@lid"`` → unchanged
     - ``"user:device@s.whatsapp.net"`` style colon-before-``@`` → ``@`` form
@@ -113,6 +114,11 @@ def to_whatsapp_jid(value: str) -> str:
     if _BARE_PHONE_RE.fullmatch(normalized):
         digits = re.sub(r"\D+", "", normalized)
         if digits:
+            # Group ids (120363…, 18 digits) match the bare-phone shape but
+            # are longer than any E.164 number — sending them as user JIDs
+            # silently delivers nowhere (#102328).
+            if digits.startswith("120363"):
+                return f"{digits}@g.us"
             return f"{digits}@s.whatsapp.net"
 
     return normalized
